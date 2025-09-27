@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>HF Space Client — Auto Resolve</title>
+  <title>HF Space Client — Auto/Proxy</title>
   <style>
     :root{ --bg:#1e1e1e; --panel:#252526; --border:#3c3c3c; --accent:#0e639c; --text:#d4d4d4; --muted:#9da0a6; }
     *{box-sizing:border-box}
@@ -17,8 +17,8 @@
     #editor{width:100%;min-height:240px;background:#0f0f0f;border:1px solid var(--border);border-radius:8px;padding:12px;white-space:pre;outline:none}
     #terminal{min-height:220px;background:#0b0b0b;border:1px solid var(--border);border-radius:8px;padding:12px;white-space:pre-wrap;overflow:auto}
     .hint{color:var(--muted);font-size:12px}
-    .ok{color:#9ae6b4} .err{color:#fca5a5}
-    .warn{color:#facc15}
+    .ok{color:#9ae6b4} .err{color:#fca5a5} .warn{color:#facc15}
+    .tag{display:inline-block;padding:2px 6px;border:1px solid var(--border);border-radius:6px;color:#bbb;font-size:12px}
   </style>
 </head>
 <body>
@@ -26,10 +26,11 @@
     <div class="panel">
       <div class="row">
         <span class="h">연결 모드</span>
+        <span class="tag" id="modeTag">프록시</span>
         <button id="modeProxy">프록시 모드</button>
-        <button id="modeAuto">자동 추적 모드(임시)</button>
+        <button id="modeAuto">자동 추적 모드(저장소 URL만)</button>
       </div>
-      <div class="hint">프록시 모드 추천. 자동 추적은 CORS 문제로 실패할 수 있어.</div>
+      <div class="hint">프록시 모드 추천. 자동 추적은 CORS/권한 상태에 따라 실패할 수 있음.</div>
     </div>
 
     <div id="proxyPanel" class="panel">
@@ -38,17 +39,22 @@
         <input id="proxyUrl" size="54" placeholder="https://your-proxy.example.com" />
         <button id="btnHealthProxy">🔌 Health</button>
       </div>
-      <div class="hint">브라우저는 이 프록시만 호출하고, 프록시가 HF Space 실행 URL을 스스로 찾아 중계.</div>
+      <div class="hint">브라우저는 프록시만 호출. 프록시가 HF 실행 주소를 알고 있거나 자동으로 찾아 중계.</div>
     </div>
 
     <div id="autoPanel" class="panel" style="display:none">
       <div class="row">
         <span class="h">스페이스 저장소 URL</span>
         <input id="repoUrl" size="54" placeholder="https://huggingface.co/spaces/peterpeter8585/codespace" />
-        <button id="btnResolve">🔎 실행 URL 자동 추적</button>
+        <button id="btnResolve">🔎 실행 주소 찾기</button>
         <span id="resolved" class="hint"></span>
       </div>
-      <div class="hint">App 버튼 리다이렉트를 따라가서 hf.space 실행 주소를 찾아볼게. CORS 차단 시 동작 안 할 수 있음.</div>
+      <div class="row" style="margin-top:8px">
+        <span class="h">직접 입력(선택)</span>
+        <input id="appUrl" size="54" placeholder="https://xxxxxxxx-peterpeter8585-xxxxxxxx.hf.space" />
+        <button id="btnHealthDirect">🔌 Health</button>
+      </div>
+      <div class="hint">App 버튼으로 들어간 .hf.space 주소를 여기 넣으면 확실함. 자동 찾기는 보조용.</div>
     </div>
 
     <div class="panel">
@@ -58,7 +64,7 @@
         <button id="btnPip">📦 서버 pip 설치</button>
         <button id="btnClear">🧹 터미널 지우기</button>
       </div>
-      <div id="editor" contenteditable="true" spellcheck="false">print("hello via auto-resolve or proxy")</div>
+      <div id="editor" contenteditable="true" spellcheck="false">print("hello from client")</div>
       <div class="hint">파이썬 코드 입력 → 실행. pip 설치는 패키지명 공백 구분으로 입력.</div>
     </div>
 
@@ -69,6 +75,7 @@
   </div>
 
   <script>
+    const modeTag = document.getElementById("modeTag");
     const modeProxyBtn = document.getElementById("modeProxy");
     const modeAutoBtn = document.getElementById("modeAuto");
     const proxyPanel = document.getElementById("proxyPanel");
@@ -80,6 +87,8 @@
     const repoUrlEl = document.getElementById("repoUrl");
     const btnResolve = document.getElementById("btnResolve");
     const resolvedSpan = document.getElementById("resolved");
+    const appUrlEl = document.getElementById("appUrl");
+    const btnHealthDirect = document.getElementById("btnHealthDirect");
 
     const btnRun = document.getElementById("btnRun");
     const btnPip = document.getElementById("btnPip");
@@ -87,8 +96,7 @@
     const editorEl = document.getElementById("editor");
     const terminalEl = document.getElementById("terminal");
 
-    let mode = "proxy"; // "proxy" | "auto"
-    let resolvedBase = ""; // auto 모드에서 찾은 hf.space 주소 또는 프록시 주소
+    let mode = "proxy"; // proxy | auto
 
     function log(s, cls){
       const line = document.createElement("div");
@@ -100,140 +108,145 @@
     function clearTerm(){ terminalEl.textContent = ""; log("$ ready."); }
     function norm(u){ return u.replace(/\/$/, ""); }
 
-    modeProxyBtn.addEventListener("click", () => {
-      mode = "proxy";
-      proxyPanel.style.display = "";
-      autoPanel.style.display = "none";
-      log("모드: 프록시", "ok");
-    });
-    modeAutoBtn.addEventListener("click", () => {
-      mode = "auto";
-      proxyPanel.style.display = "none";
-      autoPanel.style.display = "";
-      log("모드: 자동 추적(임시)", "warn");
-    });
+    function setMode(m){
+      mode = m;
+      modeTag.textContent = m === "proxy" ? "프록시" : "자동 추적";
+      proxyPanel.style.display = m === "proxy" ? "" : "none";
+      autoPanel.style.display = m === "auto" ? "" : "none";
+      log(`모드 전환: ${mode}`, "warn");
+    }
+    modeProxyBtn.addEventListener("click", () => setMode("proxy"));
+    modeAutoBtn.addEventListener("click", () => setMode("auto"));
 
     // 프록시 헬스
     btnHealthProxy.addEventListener("click", async () => {
       const base = norm(proxyUrlEl.value.trim());
       if (!base) return log("프록시 주소를 입력해줘", "err");
-      resolvedBase = base;
       log("$ GET /health (via proxy)");
-      try {
+      try{
         const r = await fetch(`${base}/health`, { headers: { "Accept":"application/json" } });
         const d = await r.json();
         if (!r.ok) throw new Error(JSON.stringify(d));
         log("✅ " + JSON.stringify(d), "ok");
-      } catch (e){ log("❌ " + e.message, "err"); }
+      }catch(e){ log("❌ " + e.message, "err"); }
     });
 
-    // 자동 추적: 저장소 URL → App 버튼 리다이렉트를 따라 hf.space 주소 얻기
+    // 자동 추적: 저장소 URL → 실행 주소 시도
     btnResolve.addEventListener("click", async () => {
       const repo = repoUrlEl.value.trim();
       if (!repo) return log("저장소 URL을 입력해줘", "err");
-      // 단순화: 앱 실행 주소는 보통 /+app 경로로 리다이렉트됨. 그걸 fetch로 따라잡기 시도.
-      // CORS 차단될 수 있어. 실패하면 프록시 모드 써야 한다.
-      log("$ Resolving hf.space URL from repo...");
-      try {
-        const resp = await fetch(repo, { redirect: "follow", mode: "cors" });
-        // fetch는 교차 출처에서 최종 URL을 노출 안 할 수 있어. 그래서 아래는 베스트에포트.
-        const finalUrl = resp.url || repo;
-        // 보통 UI에서 App 버튼은 /?something → 실제 실행은 별도 서브도메인으로 열리므로
-        // 여기선 사용자에게 안내 + 수동 입력을 유도
+      log("$ 실행 주소 자동 추적 시도…");
+      try{
+        // 단순 GET으로는 최종 리다이렉트 도메인을 잡기 어렵다(CORS). 사용자 안내 중심.
+        const r = await fetch(repo, { redirect: "follow" });
+        const finalUrl = r.url || "";
         if (finalUrl.includes(".hf.space")) {
-          resolvedBase = finalUrl.replace(/\/$/, "");
-          resolvedSpan.textContent = "해결됨: " + resolvedBase;
-          log("✅ hf.space 주소 감지: " + resolvedBase, "ok");
+          appUrlEl.value = finalUrl.replace(/\/$/, "");
+          resolvedSpan.textContent = "감지됨: " + appUrlEl.value;
+          log("✅ 실행 주소 감지: " + appUrlEl.value, "ok");
         } else {
-          log("⚠️ CORS 때문에 자동 감지 실패했을 수 있어. 저장소 페이지 상단의 App 버튼으로 들어가서 주소창에 뜨는 .hf.space URL을 복사해 넣어줘.", "warn");
+          log("⚠️ 자동 감지가 안 보이면 저장소 페이지 App 버튼 눌러 나온 .hf.space URL을 복사해 입력해줘.", "warn");
         }
-      } catch (e) {
+      }catch(e){
         log("❌ 자동 추적 실패: " + e.message, "err");
-        log("Tip) 프록시 모드 사용 추천. 아니면 App 버튼으로 접속한 hf.space 주소를 수동으로 입력!", "hint");
+        log("Tip) App 버튼 → 주소창의 .hf.space 복사해서 아래에 붙여넣기.", "hint");
       }
     });
 
-    // 실행
+    // 직접 Health
+    btnHealthDirect.addEventListener("click", async () => {
+      const base = norm(appUrlEl.value.trim());
+      if (!base) return log(".hf.space 실행 주소를 입력해줘", "err");
+      log("$ GET /health (direct)");
+      try{
+        const r = await fetch(`${base}/health`, { headers: { "Accept":"application/json" } });
+        const d = await r.json();
+        if (!r.ok) throw new Error(JSON.stringify(d));
+        log("✅ " + JSON.stringify(d), "ok");
+      }catch(e){ log("❌ " + e.message, "err"); }
+    });
+
+    // 공통 실행
     btnRun.addEventListener("click", async () => {
       const code = editorEl.textContent || "print('hello')";
-      if (mode === "proxy") {
+      if (mode === "proxy"){
         const base = norm(proxyUrlEl.value.trim());
         if (!base) return log("프록시 주소를 입력해줘", "err");
         log("$ POST /run-python (via proxy)");
-        try {
+        try{
           const r = await fetch(`${base}/run-python`, {
             method: "POST",
             headers: { "Content-Type":"application/json", "Accept":"application/json" },
             body: JSON.stringify({ code })
           });
           const d = await r.json().catch(()=> ({}));
-          if (!r.ok) { log(`❌ HTTP ${r.status}`, "err"); if (d.detail) log("detail: " + JSON.stringify(d.detail), "err"); return; }
+          if (!r.ok) { log(`❌ HTTP ${r.status}`, "err"); if (d.detail) log("detail: "+JSON.stringify(d.detail), "err"); return; }
           log("↳ returncode: " + d.returncode);
           if (d.stdout) log("STDOUT:\n" + d.stdout, "ok");
           if (d.stderr) log("STDERR:\n" + d.stderr, "err");
-        } catch(e){ log("❌ " + e.message, "err"); }
-      } else {
-        const base = norm(resolvedBase);
-        if (!base) return log("먼저 hf.space 주소를 자동 추적하거나 수동으로 입력해줘.", "err");
+        }catch(e){ log("❌ " + e.message, "err"); }
+      }else{
+        const base = norm(appUrlEl.value.trim());
+        if (!base) return log(".hf.space 실행 주소를 먼저 입력하거나 자동 추적해줘.", "err");
         log("$ POST /run-python (direct)");
-        try {
+        try{
           const r = await fetch(`${base}/run-python`, {
             method: "POST",
             headers: { "Content-Type":"application/json", "Accept":"application/json" },
             body: JSON.stringify({ code })
           });
           const d = await r.json().catch(()=> ({}));
-          if (!r.ok) { log(`❌ HTTP ${r.status}`, "err"); if (d.detail) log("detail: " + JSON.stringify(d.detail), "err"); return; }
+          if (!r.ok) { log(`❌ HTTP ${r.status}`, "err"); if (d.detail) log("detail: "+JSON.stringify(d.detail), "err"); return; }
           log("↳ returncode: " + d.returncode);
           if (d.stdout) log("STDOUT:\n" + d.stdout, "ok");
           if (d.stderr) log("STDERR:\n" + d.stderr, "err");
-        } catch(e){ log("❌ " + e.message, "err"); }
+        }catch(e){ log("❌ " + e.message, "err"); }
       }
     });
 
-    // pip
+    // 공통 pip
     btnPip.addEventListener("click", async () => {
-      const input = prompt("설치할 패키지(공백 구분): 예) requests numpy");
-      if (!input) return;
-      const packages = input.split(/\s+/).filter(Boolean);
-      if (mode === "proxy") {
+      const pkgsInput = prompt("설치할 패키지(공백 구분): 예) requests numpy");
+      if (!pkgsInput) return;
+      const packages = pkgsInput.split(/\s+/).filter(Boolean);
+
+      if (mode === "proxy"){
         const base = norm(proxyUrlEl.value.trim());
         if (!base) return log("프록시 주소를 입력해줘", "err");
         log("$ POST /pip (via proxy) " + packages.join(", "));
-        try {
+        try{
           const r = await fetch(`${base}/pip`, {
             method: "POST",
             headers: { "Content-Type":"application/json", "Accept":"application/json" },
             body: JSON.stringify({ packages })
           });
           const d = await r.json().catch(()=> ({}));
-          if (!r.ok) { log(`❌ HTTP ${r.status}`, "err"); if (d.detail) log("detail: " + JSON.stringify(d.detail), "err"); return; }
+          if (!r.ok) { log(`❌ HTTP ${r.status}`, "err"); if (d.detail) log("detail: "+JSON.stringify(d.detail), "err"); return; }
           log("↳ returncode: " + d.returncode);
           if (d.stdout) log("STDOUT:\n" + d.stdout, "ok");
           if (d.stderr) log("STDERR:\n" + d.stderr, "err");
-        } catch(e){ log("❌ " + e.message, "err"); }
-      } else {
-        const base = norm(resolvedBase);
-        if (!base) return log("먼저 hf.space 주소를 자동 추적하거나 수동으로 입력해줘.", "err");
+        }catch(e){ log("❌ " + e.message, "err"); }
+      }else{
+        const base = norm(appUrlEl.value.trim());
+        if (!base) return log(".hf.space 실행 주소를 먼저 입력하거나 자동 추적해줘.", "err");
         log("$ POST /pip (direct) " + packages.join(", "));
-        try {
+        try{
           const r = await fetch(`${base}/pip`, {
             method: "POST",
             headers: { "Content-Type":"application/json", "Accept":"application/json" },
             body: JSON.stringify({ packages })
           });
           const d = await r.json().catch(()=> ({}));
-          if (!r.ok) { log(`❌ HTTP ${r.status}`, "err"); if (d.detail) log("detail: " + JSON.stringify(d.detail), "err"); return; }
+          if (!r.ok) { log(`❌ HTTP ${r.status}`, "err"); if (d.detail) log("detail: "+JSON.stringify(d.detail), "err"); return; }
           log("↳ returncode: " + d.returncode);
           if (d.stdout) log("STDOUT:\n" + d.stdout, "ok");
           if (d.stderr) log("STDERR:\n" + d.stderr, "err");
-        } catch(e){ log("❌ " + e.message, "err"); }
+        }catch(e){ log("❌ " + e.message, "err"); }
       }
     });
 
-    btnClear.addEventListener("click", clearTerm);
+    // 초기 상태
     clearTerm();
-    // 편의상 기본 저장소 URL 넣어줌
     repoUrlEl.value = "https://huggingface.co/spaces/peterpeter8585/codespace";
   </script>
 </body>
